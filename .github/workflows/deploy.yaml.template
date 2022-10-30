@@ -1,0 +1,53 @@
+name: Deploy Multi K8s
+on:
+  push:
+    branches:
+      - master
+
+env:
+  SHA: $(git rev-parse HEAD)      
+  
+jobs:
+  build:
+    name: Build, push and deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Test  
+        run: |-
+          docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
+          docker build -t piotrfranekjan/multi-client-test -f ./client/Dockerfile.dev ./client
+          docker run -e CI=true piotrfranekjan/multi-client-test npm run test
+
+      - name: Build images
+        run: |-
+          docker build -t piotrfranekjan/multi-client ./client 
+          docker build -t piotrfranekjan/multi-worker ./worker 
+          docker build -t piotrfranekjan/multi-server ./server
+
+      - name: Push images
+        run: |-
+          docker push piotrfranekjan/multi-client:latest 
+          docker push piotrfranekjan/multi-worker:latest
+          docker push piotrfranekjan/multi-server:latest
+          docker push piotrfranekjan/multi-client:${{ env.SHA }}
+          docker push piotrfranekjan/multi-server:${{ env.SHA }}
+          docker push piotrfranekjan/multi-worker:${{ env.SHA }}     
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}    
+
+      - name: Save DigitalOcean kubeconfig with short lived credentials
+        run: doctl kubernetes cluster kubeconfig save --expiry-seconds 600 <cluster_identifier>                     
+
+      - name: Apply
+        run: |-
+          kubectl apply -f k8s
+          kubectl set image deployments/server-deployment server=<docker_username>/multi-server:${{ env.SHA }}
+          kubectl set image deployments/client-deployment client=<docker_username>/multi-client:${{ env.SHA }}
+          kubectl set image deployments/worker-deployment worker=<docker_username>/multi-worker:${{ env.SHA }}
+           
